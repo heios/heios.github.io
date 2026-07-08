@@ -1,0 +1,118 @@
+/* Page theme (@pelagornis/page) styles. */
+@import "@pelagornis/page/styles";
+
+/* ------------------------------------------------------------------ *
+ * Heading scale
+ *
+ * The Page theme's heading scale runs large (page title 2.625rem, h2
+ * 2.1875rem). Divide the whole Starlight heading scale by ~1.5 so the
+ * document title and section headings sit at a calmer size. The theme
+ * sizes headings from these variables, so overriding them (with
+ * !important, since the theme sets values with high priority) rescales
+ * both the page title and in-content headings while leaving body text.
+ * ------------------------------------------------------------------ */
+:root {
+	--sl-text-h1: 1.75rem !important;   /* 2.625   / 1.5 */
+	--sl-text-h2: 1.458rem !important;  /* 2.1875  / 1.5 */
+	--sl-text-h3: 1.208rem !important;  /* 1.8125  / 1.5 */
+	--sl-text-h4: 1rem !important;      /* 1.5     / 1.5 */
+	--sl-text-h5: 0.875rem !important;  /* 1.125   / 1.5 (floored for legibility) */
+}
+
+/* ------------------------------------------------------------------ *
+ * Styled hover-tooltips — pure CSS, no JS (CSS Anchor Positioning)
+ *
+ * rehype-tooltips.mjs turns Markdown link titles [text](url "title") into
+ * <a class="tip" data-tooltip="title">. The tooltip is the link's ::after
+ * pseudo-element. A pseudo-element implicitly anchors to its own originating
+ * element, so no per-tooltip anchor names are needed — every .tip is
+ * positioned relative to its own link automatically. position-try-fallbacks
+ * keeps the bubble on-screen: it flips above↔below and start↔end so a trigger
+ * near a viewport edge never pushes the bubble off-screen.
+ *
+ * Baseline 2026 (Chrome 125+, Firefox 132+, Safari 18.4+, ~91%). The @supports
+ * fallback gives older browsers a plain centred bubble.
+ * ------------------------------------------------------------------ */
+/* Fallback placements the browser tries, in order, when the default (centred
+ * above) would overflow: shift left/right while staying above, then drop below
+ * and do the same. The first one that fits on-screen wins. */
+@position-try --tip-top-start {
+  position-area: top span-inline-start;
+}
+@position-try --tip-top-end {
+  position-area: top span-inline-end;
+}
+@position-try --tip-bottom {
+  position-area: bottom;
+}
+@position-try --tip-bottom-start {
+  position-area: bottom span-inline-start;
+}
+@position-try --tip-bottom-end {
+  position-area: bottom span-inline-end;
+}
+
+.tip {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+  /* Name each link as an anchor and scope the name to itself, so every
+   * .tip::after binds to its own link rather than the last one on the page. */
+  anchor-name: --tip;
+  anchor-scope: --tip;
+}
+
+.tip::after {
+  content: attr(data-tooltip);
+
+  position: absolute;
+  position-anchor: --tip;
+  /* Centred above the link by default; the fallbacks shift it sideways and/or
+   * below so a trigger near any viewport edge keeps the bubble fully on-screen. */
+  position-area: top;
+  position-try-fallbacks: --tip-top-start, --tip-top-end, --tip-bottom,
+    --tip-bottom-start, --tip-bottom-end;
+
+  width: max-content;
+  max-width: min(20rem, 90vw);
+  margin: 0.4em 0; /* gap; flips with the block position */
+  box-sizing: border-box;
+  white-space: normal;
+  text-align: left;
+  font-size: var(--sl-text-xs, 0.8rem);
+  font-weight: 400;
+  line-height: 1.45;
+  color: #f4f6f8;
+  background: #1b1e24;
+  border: 1px solid #3a3f47;
+  border-radius: 0.45rem;
+  padding: 0.55em 0.7em;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.tip:hover::after,
+.tip:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Fallback for browsers without CSS anchor positioning (~9%): a plain bubble
+ * centred above the link. It may clip near an edge, but never breaks. */
+@supports not (position-area: top) {
+  .tip {
+    position: relative;
+  }
+  .tip::after {
+    left: 50%;
+    bottom: calc(100% + 0.4em);
+    transform: translateX(-50%);
+    max-width: min(20rem, 72vw);
+  }
+}

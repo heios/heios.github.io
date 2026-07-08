@@ -1,0 +1,3 @@
+[submodule "research/ai-commit-attribution"]
+	path = research/ai-commit-attribution
+	url = https://github.com/heios/ai-commit-attribution.git
