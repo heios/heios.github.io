@@ -20,5 +20,8 @@ pnpm-debug.log*
 # macOS-specific files
 .DS_Store
 
+# local editor/agent tooling (e.g. Claude Code preview launch config)
+.claude/
+
 # generated from the ai-commit-attribution submodule by scripts/sync-content.mjs
 src/content/docs/research/2026-07-08/

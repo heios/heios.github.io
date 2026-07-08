@@ -1,0 +1,18 @@
+---
+// Restore Starlight's `#_top` skip-link target on hero/splash pages.
+//
+// Starlight's SkipLink always points at `#_top`, and Starlight normally places
+// that id on the page-title <h1> (via PageTitle). Hero pages render <Hero>
+// instead of <PageTitle>, and the Page theme's Hero override drops the id — so
+// on the home page and the 404 page the "Skip to content" link has no target.
+//
+// Wrap the theme's Hero and emit a zero-height `#_top` anchor immediately before
+// it, so the skip link lands at the top of the main content, matching the
+// behaviour on ordinary doc pages. This component is only rendered when a page
+// has `hero` frontmatter (Starlight's Page.astro gates it), so it never collides
+// with the `#_top` that PageTitle emits on non-hero pages.
+import ThemeHero from '@pelagornis/page/overrides/Hero.astro';
+---
+
+<div id="_top"></div>
+<ThemeHero {...Astro.props} />

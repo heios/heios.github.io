@@ -21,6 +21,10 @@ export default defineConfig({
 		starlight({
 			title: 'heios',
 			plugins: [pagePlugin(), starlightLinksValidator()],
+			// Wrap the Page theme's Hero to re-add Starlight's `#_top` skip-link
+			// target, which the theme's Hero drops on splash pages (home + 404).
+			// The Page plugin preserves user-set component overrides.
+			components: { Hero: './src/components/Hero.astro' },
 			// Empties the sidebar on the home + research index (see the file).
 			routeMiddleware: './src/starlightRouteData.ts',
 			customCss: ['./src/styles/custom.css'],
