@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Live simulation of BusyNCR's exponential-thinning backup retention grid: scrub time, watch snapshots slide across tier cells, and inspect every eviction at the grid boundaries.">
+<title>BusyNCR retention grid</title>
+</head>
+<body>
+<style>
+/* minimal reset so the standalone page matches the artifact host (which injects one) */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #10161F;
+  --panel: #141C28;
+  --panel2: #0D131B;
+  --line: #243040;
+  --line-soft: #1B2532;
+  --ink: #D9E3EF;
+  --muted: #7E8CA0;
+  --faint: #55637A;
+  --t0: #59C2FF;
+  --t1: #7B9DFF;
+  --t2: #A98BFF;
+  --t3: #F0A63C;
+  --evict: #FF5C4D;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 26px 20px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* masthead */
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+.eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  color: var(--t0);
+}
+.masthead h1 {
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-top: 7px;
+  text-wrap: balance;
+}
+.masthead .sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 7px;
+  max-width: 68ch;
+  line-height: 1.55;
+}
+.clock { text-align: right; flex: none; }
+.clock-day {
+  display: block;
+  font-size: 29px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.clock-sub {
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* controls */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.controls button { font-family: var(--mono); }
+.btn {
+  background: #1B2B3D;
+  border: 1px solid #2E4763;
+  border-radius: 4px;
+  color: #BFE3FF;
+  font-size: 12px;
+  padding: 7px 14px;
+  cursor: pointer;
+  min-width: 96px;
+}
+.btn:hover { border-color: #3D5E85; }
+.seg {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.seg button {
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  padding: 7px 11px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.seg button:first-child { border-left: 0; }
+.seg button:hover { color: var(--ink); }
+.seg button.on { background: #1B2B3D; color: #BFE3FF; }
+.check {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+.check input { accent-color: var(--t0); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.chip {
+  font-size: 11px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chip:hover { color: var(--ink); border-color: #3D4E66; }
+button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--t0);
+  outline-offset: 2px;
+}
+
+/* grid canvas */
+.canvas-wrap {
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0D131B;
+}
+.canvas-wrap canvas {
+  display: block;
+  width: 1160px;
+  height: 330px;
+  cursor: grab;
+  touch-action: pan-y;
+}
+.canvas-wrap canvas.dragging { cursor: grabbing; }
+.tip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(11, 16, 23, 0.96);
+  border: 1px solid #2E4763;
+  border-radius: 4px;
+  padding: 8px 11px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 320px;
+  z-index: 3;
+}
+.tip b { color: #BFE3FF; }
+
+.scrubrow input[type='range'] {
+  width: 100%;
+  accent-color: var(--t0);
+  cursor: pointer;
+}
+
+/* legend + hint */
+.legend {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { display: inline-block; flex: none; }
+.sw.alive { width: 9px; height: 9px; border-radius: 50%; background: #EAF3FF; box-shadow: 0 0 0 1.5px var(--t1); }
+.sw.doomed { width: 9px; height: 9px; border-radius: 50%; background: #EAF3FF; box-shadow: 0 0 0 2px var(--evict); }
+.sw.pop { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--evict); }
+.sw.arc { width: 22px; height: 0; border-top: 2px dashed var(--evict); }
+.sw.cell {
+  width: 18px; height: 13px;
+  background: rgba(123, 157, 255, 0.12);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+.hint {
+  font-size: 11px;
+  color: var(--faint);
+  line-height: 1.7;
+}
+.hint kbd {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 5px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+/* panels */
+.panels {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel2);
+  padding: 14px 16px;
+}
+.panel h2 {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.stat-big {
+  font-size: 34px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.stat-big-label { color: var(--faint); font-size: 11px; margin-top: 4px; }
+.tiers { display: flex; gap: 5px; margin: 12px 0 10px; }
+.tiers b {
+  flex: 1;
+  text-align: center;
+  padding: 6px 0;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.tiers b:nth-child(1) { background: rgba(89, 194, 255, 0.12); color: var(--t0); }
+.tiers b:nth-child(2) { background: rgba(123, 157, 255, 0.12); color: var(--t1); }
+.tiers b:nth-child(3) { background: rgba(169, 139, 255, 0.12); color: var(--t2); }
+.tiers b:nth-child(4) { background: rgba(240, 166, 60, 0.12); color: var(--t3); }
+.stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 5px 0;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+}
+.stat b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* eviction log */
+.log ol {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 236px;
+  overflow-y: auto;
+  font-size: 11.5px;
+}
+.ev {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  padding: 3px 7px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.ev .t {
+  color: var(--faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  min-width: 74px;
+}
+.ev .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--c, var(--muted));
+  flex: none;
+  align-self: center;
+}
+.ev .txt { color: var(--muted); }
+.ev .victim { color: var(--ink); }
+.ev.cap .txt { color: var(--t3); }
+.ev.cap .victim { color: var(--t3); }
+.ev.fresh { background: #1A2433; }
+.ev.next { opacity: 0.55; border-color: var(--line); border-style: dashed; }
+
+/* explainer */
+.explain {
+  font-family: var(--sans);
+  color: #A9B7C9;
+  font-size: 13.5px;
+  line-height: 1.65;
+  max-width: 82ch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.explain strong { color: var(--ink); font-weight: 600; }
+.explain code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.explain .foot {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  line-height: 1.7;
+}
+.explain a {
+  color: var(--t0);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(89, 194, 255, 0.35);
+}
+.explain a:hover { border-bottom-color: var(--t0); }
+
+@media (max-width: 780px) {
+  .masthead { flex-direction: column; align-items: flex-start; }
+  .clock { text-align: left; }
+  .panels { grid-template-columns: 1fr; }
+  .chips { margin-left: 0; }
+}
+
+</style>
+<div class="app">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">BUSYNCR · PRD §3.5 · RETENTION EXPERIMENT</p>
+      <h1>Exponential thinning grid, live</h1>
+      <p class="sub">A snapshot every 3 h enters at the “now” edge and drifts right as it ages
+        through four tiers: 1 per 3 h &lt; 24 h · 1 per 24 h to 4 d · 1 per 4 d to 16 d ·
+        1 per 16 d beyond, capped at 5 — so 8 backups/day settle into ~20 kept snapshots
+        spanning ≈ 84 days.</p>
+    </div>
+    <div class="clock">
+      <span class="clock-day" id="clock">day 000 · 00:00</span>
+      <span class="clock-sub" id="clockSub">t = 0.00 d of 200 d</span>
+    </div>
+  </header>
+
+  <div class="controls">
+    <button id="play" class="btn" aria-pressed="true">❙❙ pause</button>
+    <div class="seg" id="speed" role="group" aria-label="playback speed"></div>
+    <div class="seg" role="group" aria-label="step between evictions">
+      <button id="prevPrune" title="jump to just before the previous eviction">⟨ prune</button>
+      <button id="nextPrune" title="jump to just before the next eviction">prune ⟩</button>
+    </div>
+    <label class="check"><input type="checkbox" id="jitter"> ±25 min jitter</label>
+    <label class="check" title="policy flip: a cell's first snapshot holds it; later arrivals bounce off the tier edge"><input type="checkbox" id="oldest"> keep oldest per cell</label>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="canvas-wrap" id="wrap">
+    <canvas id="cv" width="1160" height="330" aria-label="retention grid animation"></canvas>
+    <div class="tip" id="tip" hidden></div>
+  </div>
+
+  <div class="scrubrow">
+    <input type="range" id="scrub" min="0" max="4800" step="0.1" value="0" aria-label="simulation time">
+  </div>
+
+  <div class="legend">
+    <span><i class="sw alive"></i> kept snapshot</span>
+    <span><i class="sw doomed"></i> about to be evicted</span>
+    <span><i class="sw pop"></i> eviction</span>
+    <span><i class="sw arc"></i> evictor → evicted</span>
+    <span><i class="sw cell"></i> one grid cell (drifts with time)</span>
+  </div>
+
+  <p class="hint">
+    <kbd>scroll</kbd> on the grid to scrub time — fine over the 3 h band, coarse over the 16 d band ·
+    <kbd>drag</kbd> the grid to pull time along · <kbd>shift</kbd> = 6× coarser, <kbd>alt</kbd> = 10× finer ·
+    <kbd>space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> step 30 min · hover a snapshot for its fate ·
+    <kbd>prune ⟩</kbd> jumps 1 h before the next eviction so you can scroll through it.
+  </p>
+
+  <section class="panels">
+    <div class="panel stats">
+      <h2>Retention state</h2>
+      <div class="stat-big" id="stKept">0</div>
+      <div class="stat-big-label">snapshots kept right now</div>
+      <div class="tiers" id="stTiers" title="kept per tier: 3 h / 24 h / 4 d / 16 d"><b>0</b><b>0</b><b>0</b><b>0</b></div>
+      <div class="stat"><span>taken so far</span><b id="stTaken">0</b></div>
+      <div class="stat"><span>pruned so far</span><b id="stPruned">0</b></div>
+      <div class="stat"><span>history span (oldest kept)</span><b id="stSpan">—</b></div>
+      <div class="stat"><span>next backup</span><b id="stNextB">—</b></div>
+      <div class="stat"><span>next prune</span><b id="stNextP">—</b></div>
+    </div>
+    <div class="panel log">
+      <h2>Eviction log <span id="logMeta"></span></h2>
+      <ol id="log"></ol>
+    </div>
+  </section>
+
+  <section class="explain">
+    <p><strong>What you're looking at.</strong> Each dot is a snapshot. The four bands are the
+      retention tiers; every band is drawn at the same width per cell, so time runs 8× slower in
+      the 24 h band than the 3 h band, and so on. Cell boundaries inside a band are anchored to
+      absolute time — <code>cell = floor(timestamp / cell_width)</code> — which is why the cells
+      drift along with their snapshots while the tier boundaries (24 h, 4 d, 16 d) sit at fixed ages.</p>
+    <p><strong>The pruning rule.</strong> When a snapshot crosses into a coarser tier it claims its
+      cell there; an older snapshot still holding the same cell is evicted — <em>keep the newest per
+      cell</em>. The 16 d tier additionally keeps at most <strong>5</strong> snapshots: when a sixth
+      cell opens, the oldest is dropped. On the daemon, an eviction is just “drop manifest, GC
+      unreferenced chunks”, which is what makes this retention scheme O(manifest)-cheap.</p>
+    <p><strong>What falls out.</strong> With an aligned 3 h schedule every eviction happens at a fixed
+      age: <strong>27 h</strong> (entering the 24 h grid), <strong>5 d</strong> (entering 4 d),
+      <strong>20 d</strong> (entering 16 d), and <strong>84 d</strong> (pushed past the cap). Steady
+      state holds 8 + 3–4 + 3–4 + 5 ≈ <strong>19–21</strong> snapshots — out of 8 backups per day,
+      forever. The cap of five 16 d snapshots bounds total history at ≈ 84 days.</p>
+    <p><strong>Policy toggle: keep oldest per cell.</strong> Flipping the checkbox makes a cell's
+      <em>first</em> snapshot hold it, and every later arrival bounces the instant it crosses the tier
+      edge — evictions land exactly <em>on</em> the 24 h / 4 d / 16 d lines, and cap drops land exactly
+      at <strong>96 d</strong> (the grid's right edge), instead of one backup-interval past them.
+      Steady-state cost is nearly identical (~19 vs ~20 kept), but each cell is now represented by its
+      start rather than its end, so the same cap of 5 stretches retained history from ≈ 84 d to
+      ≈ 96 d — at the price of the freshest tier-4 snapshot being a full 16 d cell older on average.</p>
+    <p class="foot">Verified: the precomputed timeline used by this animation matches an independent
+      replay of the daemon's prune-after-every-backup pass at 120 random instants for each policy
+      (keep newest / keep oldest) × jitter combination; the 16 d tier never exceeded 5; max 22
+      concurrent snapshots over 200 simulated days (1600 backups, 1581 prunes per run). Timeline is a
+      pure function of t, so scrubbing backwards un-prunes correctly. Source:
+      <a href="https://github.com/heios/busyncr-visual-grid">heios/busyncr-visual-grid</a>.</p>
+  </section>
+</div>
+<script>
+"use strict";(()=>{var c=[{minAge:0,cell:3,name:"3 h"},{minAge:24,cell:24,name:"24 h"},{minAge:96,cell:96,name:"4 d"},{minAge:384,cell:384,name:"16 d",cap:5}],J=3,$t=1.5,R=200*24,Q=384*6;function I(t){let n=0;for(let r=1;r<c.length;r++)t>=c[r].minAge&&(n=r);return n}function W(t,n){return Math.floor(t/c[n].cell)}function Et(t){let n=t>>>0;return()=>{n=n+1831565813|0;let r=Math.imul(n^n>>>15,1|n);return r=r+Math.imul(r^r>>>7,61|r)^r,((r^r>>>14)>>>0)/4294967296}}function tt(t={}){let{jitter:n=!1,keepOldest:r=!1,seed:a=20260710}=t,f=Et(a),l=[];for(let i=$t;i<=R;i+=J){let m=n?(f()-.5)*.8333333333333334:0;l.push({i:l.length,ts:i+m,death:null})}let s=[];for(let i of l)for(let m=0;m<c.length;m++){let v=i.ts+c[m].minAge;v<=R&&s.push({t:v,i:i.i,k:m})}s.sort((i,m)=>i.t-m.t||l[i.i].ts-l[m.i].ts);let d=new Set,x=[],p=(i,m,v,$,A)=>{l[i].death={t:m,cause:v,killer:$,tier:A},d.delete(i),x.push({t:m,victim:i,killer:$,cause:v,tier:A})},g=1e-6,C=(i,m,v)=>{let $=v-l[i].ts,A=m+1<c.length?c[m+1].minAge:1/0;return $>=c[m].minAge-g&&$<A-g},u=(i,m,v)=>[...d].filter($=>l[$].ts<l[i].ts&&C($,m,v)&&W(l[$].ts,m)===W(l[i].ts,m));for(let i of s){let m=l[i.i];if(i.k===0){d.add(m.i);let A=u(i.i,0,i.t);if(r)A.length&&p(i.i,i.t,"displaced",A[0],0);else for(let H of A)p(H,i.t,"displaced",i.i,0);continue}if(m.death)continue;let v=u(i.i,i.k,i.t);if(r)v.length&&p(i.i,i.t,"displaced",v[0],i.k);else for(let A of v)p(A,i.t,"displaced",i.i,i.k);let $=c[i.k].cap;if($!==void 0&&!m.death){let A=[...d].filter(H=>i.t-l[H].ts>=c[i.k].minAge-g);for(A.sort((H,kt)=>l[H].ts-l[kt].ts);A.length>$;)p(A.shift(),i.t,"cap",m.i,i.k)}}return{snaps:l,prunes:x}}function B(t,n){return t.ts<=n&&(t.death===null||n<t.death.t)}var F=1160,U=330,Z=14,Tt=14,Y=56,j=252,k=158,at=j+17,yt=c.length-1,pt=t=>t+1<c.length?c[t+1].minAge:Q,mt=c.map((t,n)=>(pt(n)-t.minAge)/t.cell),Mt=mt.reduce((t,n)=>t+n,0),ot=(F-Z-Tt)/Mt,M=[Z];for(let t=0;t<c.length;t++)M.push(M[t]+mt[t]*ot);function D(t){if(t<=0)return Z;if(t>=Q)return M[c.length];let n=I(t);return M[n]+(t-c[n].minAge)/c[n].cell*ot}function Ct(t){for(let n=0;n<c.length;n++)if(t<M[n+1])return n;return yt}var G=["#59C2FF","#7B9DFF","#A98BFF","#F0A63C"],Lt=["rgba(89,194,255,0.055)","rgba(123,157,255,0.055)","rgba(169,139,255,0.055)","rgba(240,166,60,0.055)"],S={bg:"#0D131B",lineSoft:"#202B3A",edge:"#3D4E66",ink:"#D9E3EF",muted:"#7E8CA0",faint:"#55637A",dot:"#EAF3FF",evict:"#FF5C4D",cap:"#F0A63C",now:"#59C2FF"},w="ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",Pt=["0 \u2013 24 H","24 H \u2013 4 D","4 \u2013 16 D","\u2265 16 D \xB7 CAP 5"],Rt=["keep 1 per 3 h","keep 1 per 24 h","keep 1 per 4 d","keep 1 per 16 d, max 5"],wt=["now","24 h","4 d","16 d","96 d"],ht=matchMedia("(prefers-reduced-motion: reduce)").matches,b=tt({}),q=!1,o=0,K=!ht,et=6,nt=2.5,ct=3,h=t=>document.getElementById(t),T=h("cv"),Dt=h("wrap"),_=h("tip"),N=h("scrub"),e=T.getContext("2d");{let t=Math.min(2,window.devicePixelRatio||1);T.width=F*t,T.height=U*t,e.setTransform(t,0,0,t,0,0)}function E(t){let n=Math.round(t*60),r=Math.floor(n/1440),a=String(Math.floor(n%1440/60)).padStart(2,"0"),f=String(n%60).padStart(2,"0");return`d${r} ${a}:${f}`}function P(t){return t<48?`${Math.round(t*10)/10} h`:`${Math.round(t/24*10)/10} d`}function Ot(t,n){let a=W(n,t)*c[t].cell,f=a+c[t].cell;if(t===0){let l=s=>`${String(Math.floor(s%24)).padStart(2,"0")}:00`;return`cell d${Math.floor(a/24)} ${l(a)}\u2013${l(f)}`}return t===1?`cell d${a/24}`:`cell d${a/24}\u2013d${f/24-1}`}function X(t){let n=b.prunes,r=0,a=n.length;for(;r<a;){let f=r+a>>1;n[f].t<=t?r=f+1:a=f}return r}function L(t){o=Math.max(0,Math.min(R,t)),o>=R&&y(!1)}function y(t){K=t;let n=h("play");n.textContent=t?"\u2759\u2759 pause":"\u25B6 play",n.setAttribute("aria-pressed",String(t))}function dt(t,n,r,a,f){e.strokeStyle=a,e.lineWidth=f,e.beginPath(),e.moveTo(t,n),e.lineTo(t,r),e.stroke()}function Ft(t){e.clearRect(0,0,F,U),e.fillStyle=S.bg,e.fillRect(0,0,F,U),e.letterSpacing="0px";let n=[0,0,0,0];for(let s of b.snaps){if(s.ts>o)break;B(s,o)&&n[I(o-s.ts)]++}for(let s=0;s<c.length;s++){let d=c[s].minAge,x=pt(s),p=c[s].cell,g=Math.floor((o-x)/p),C=Math.floor((o-d)/p);for(let u=g;u<=C;u++){let i=Math.max(d,o-(u+1)*p),m=Math.min(x,o-u*p);if(m<=i)continue;if((u%2+2)%2===0){let $=D(i),A=D(m);e.fillStyle=Lt[s],e.fillRect($,Y,A-$,j-Y)}let v=o-u*p;v>d+1e-9&&v<x-1e-9&&dt(D(v),Y,j,S.lineSoft,1)}e.textAlign="left",e.font=`600 10px ${w}`,e.letterSpacing="1.5px",e.fillStyle=G[s],e.fillText(Pt[s],M[s]+8,24),e.letterSpacing="0px",e.font=`10px ${w}`,e.fillStyle=S.faint,e.fillText(Rt[s],M[s]+8,40),e.textAlign="right",e.fillStyle=G[s],e.font=`600 11px ${w}`,e.fillText(`${n[s]} kept`,M[s+1]-8,24)}e.strokeStyle="rgba(217,227,239,0.07)",e.lineWidth=1,e.beginPath(),e.moveTo(Z,k),e.lineTo(M[c.length],k),e.stroke();for(let s=0;s<=c.length;s++)dt(M[s],Y-8,j,s===0?S.now:S.edge,s===0?2:1);e.font=`10px ${w}`;for(let s=0;s<=c.length;s++)e.fillStyle=s===0?S.now:S.muted,e.textAlign=s===0?"left":s===c.length?"right":"center",e.fillText(wt[s],M[s]+(s===0?2:0),at);e.fillStyle=S.faint,e.textAlign="right",e.fillText("older \u2192",M[c.length],at+14);let r=X(o);for(let s=X(o-nt);s<r;s++){let d=b.prunes[s],x=b.snaps[d.victim],p=D(o-x.ts),g=(o-d.t)/nt,C=d.cause==="cap"?S.cap:S.evict,u=k+g*12;e.globalAlpha=(1-g)*.45,e.fillStyle=S.dot,e.beginPath(),e.arc(p,u,4.5,0,7),e.fill(),e.globalAlpha=(1-g)*.9,e.strokeStyle=C,e.lineWidth=2,e.beginPath(),e.arc(p,u,6+g*18,0,7),e.stroke(),e.font=`600 10px ${w}`,e.textAlign="center",e.fillStyle=C,e.fillText(d.cause==="cap"?"over cap":"\u2715",p,u-26-g*8),e.globalAlpha=1}let a=0,f=[],l=ht?1:.55+.45*Math.sin(t/110);for(let s of b.snaps){if(s.ts>o)break;if(!B(s,o))continue;let d=o-s.ts,x=I(d),p=D(d);if(d<1.2&&(e.globalAlpha=(1-d/1.2)*.5,e.strokeStyle=S.now,e.lineWidth=2,e.beginPath(),e.arc(p,k,6+(1.2-d)*5,0,7),e.stroke(),e.globalAlpha=1),e.fillStyle=S.dot,e.beginPath(),e.arc(p,k,4.5,0,7),e.fill(),e.globalAlpha=.75,e.strokeStyle=G[x],e.lineWidth=1.5,e.beginPath(),e.arc(p,k,6.5,0,7),e.stroke(),e.globalAlpha=1,s.death&&s.death.t-o<=ct&&(e.globalAlpha=l,e.strokeStyle=S.evict,e.lineWidth=2,e.beginPath(),e.arc(p,k,9,0,7),e.stroke(),e.globalAlpha=1,f.push({s,x:p})),x>=1){let g=a++%2;e.font=`9px ${w}`,e.textAlign="center",e.fillStyle=S.muted,e.fillText(E(s.ts),p,k+24+g*12)}}for(let{s,x:d}of f){let x=s.death,p=b.snaps[x.killer],g=D(o-p.ts),C=1-(x.t-o)/ct,u=x.cause==="cap"?S.cap:S.evict;e.globalAlpha=.3+.6*C,e.strokeStyle=u,e.lineWidth=1.5,e.setLineDash([5,4]);let i=k-46-Math.min(28,Math.abs(d-g)*.06);e.beginPath(),e.moveTo(g,k-10),e.quadraticCurveTo((g+d)/2,i,d,k-12),e.stroke(),e.setLineDash([]),e.fillStyle=u,e.beginPath(),e.moveTo(d,k-10),e.lineTo(d-4,k-18),e.lineTo(d+4,k-18),e.closePath(),e.fill(),e.strokeStyle=u,e.lineWidth=1.5,e.beginPath(),e.arc(g,k,8.5,0,7),e.stroke(),x.cause==="cap"&&(e.font=`600 10px ${w}`,e.textAlign="center",e.fillText(`cap 5 \xB7 in ${P(Math.max(0,x.t-o))}`,(g+d)/2,i+8)),e.globalAlpha=1}}function ut(t,n){let r=b.snaps[t.victim],a=b.snaps[t.killer],f=t.cause==="cap"?`<span class="victim">${E(r.ts)}</span> dropped \u2014 16 d tier over cap (5), pushed out by ${E(a.ts)}`:q?`<span class="victim">${E(r.ts)}</span> bounced at the ${c[t.tier].name} edge \u2014 cell already held by ${E(a.ts)}`:`<span class="victim">${E(r.ts)}</span> evicted \u2014 ${c[t.tier].name} cell claimed by ${E(a.ts)}`,l=n?`in ${P(t.t-o)}`:E(t.t);return`<li class="${`ev ${t.cause}${n?" next":""}${!n&&o-t.t<nt?" fresh":""}`}"><span class="t">${l}</span><i class="dot" style="--c:${G[t.tier]}"></i><span class="txt">${f}</span></li>`}var st=-1;function It(t){let n=Math.round(o*60),r=String(Math.floor(n%1440/60)).padStart(2,"0"),a=String(n%60).padStart(2,"0");h("clock").textContent=`day ${String(Math.floor(n/1440)).padStart(3,"0")} \xB7 ${r}:${a}`,h("clockSub").textContent=`t = ${(o/24).toFixed(2)} d of ${R/24} d`,lt||(N.value=String(o));let f=0,l=0,s=0,d=[0,0,0,0];for(let u of b.snaps){if(u.ts>o)break;l++,B(u,o)&&(f++,d[I(o-u.ts)]++,s=Math.max(s,o-u.ts))}h("stKept").textContent=String(f),h("stTaken").textContent=String(l),h("stPruned").textContent=String(l-f),h("stSpan").textContent=f?P(s):"\u2014";let x=b.snaps.find(u=>u.ts>o);h("stNextB").textContent=x?`in ${P(x.ts-o)}`:"\u2014";let p=X(o),g=b.prunes[p];h("stNextP").textContent=g?`in ${P(g.t-o)}`:"\u2014";let C=h("stTiers").children;for(let u=0;u<4;u++)C[u].textContent=String(d[u]);if(t-st>150){st=t;let u=[];g&&u.push(ut(g,!0));for(let i=p-1;i>=Math.max(0,p-12);i--)u.push(ut(b.prunes[i],!1));h("log").innerHTML=u.join(""),h("logMeta").textContent=`\u2014 ${p} so far`}}var O=-1,V=-1,z=!1;function _t(){if(z||O<0){_.hidden=!0;return}let t=null;for(let l of b.snaps){if(l.ts>o)break;B(l,o)&&Math.abs(D(o-l.ts)-O)<=9&&Math.abs(k-V)<=16&&(t=l)}if(!t){_.hidden=!0;return}let n=o-t.ts,r=I(n),a;t.death?t.death.cause==="cap"?a=`dropped ${E(t.death.t)} (age ${P(t.death.t-t.ts)}) \u2014 oldest beyond cap 5 when ${E(b.snaps[t.death.killer].ts)} entered the 16 d tier`:q?a=`bounced ${E(t.death.t)} (age ${P(t.death.t-t.ts)}) \u2014 ${c[t.death.tier].name} cell already held by ${E(b.snaps[t.death.killer].ts)}`:a=`evicted ${E(t.death.t)} (age ${P(t.death.t-t.ts)}) \u2014 ${c[t.death.tier].name} cell claimed by ${E(b.snaps[t.death.killer].ts)}`:a="retained through the end of the simulation",_.innerHTML=`<b>snapshot ${E(t.ts)}</b><br>age ${P(n)} \xB7 ${c[r].name} grid, ${Ot(r,t.ts)}<br>${a}`,_.hidden=!1;let f=O>F-330?O-316:O+16;_.style.left=`${f-(Dt.scrollLeft||0)}px`,_.style.top=`${Math.max(4,V-64)}px`}h("play").addEventListener("click",()=>y(!K));var Ht=[[1,"1 h/s"],[6,"6 h/s"],[24,"1 d/s"],[96,"4 d/s"]];{let t=h("speed");for(let[n,r]of Ht){let a=document.createElement("button");a.textContent=r,n===et&&(a.className="on"),a.addEventListener("click",()=>{et=n;for(let f of Array.from(t.children))f.className="";a.className="on"}),t.appendChild(a)}}function gt(){let t=l=>b.prunes.find(s=>s.cause==="displaced"&&s.tier===l),n=b.prunes.find(l=>l.cause==="cap"),r=[["day 0",0]],a=["","24 h edge","4 d edge","16 d edge"];for(let l=1;l<=3;l++){let s=t(l);s&&r.push([`first ${a[l]} eviction`,s.t-1.5])}n&&r.push([`cap kicks in (d${Math.round(n.t/24)})`,n.t-1.5]),r.push(["steady state (d120)",120*24]);let f=h("chips");f.innerHTML="";for(let[l,s]of r){let d=document.createElement("button");d.className="chip",d.textContent=l,d.addEventListener("click",()=>L(s)),f.appendChild(d)}}gt();function bt(){q=h("oldest").checked,b=tt({jitter:h("jitter").checked,keepOldest:q}),st=-1,gt()}h("jitter").addEventListener("change",bt);h("oldest").addEventListener("change",bt);h("prevPrune").addEventListener("click",()=>{let t=X(o-.05)-1;t>=0&&(L(b.prunes[t].t-1),y(!1))});h("nextPrune").addEventListener("click",()=>{let t=b.prunes[X(o+1.05)];t&&(L(t.t-1),y(!1))});var lt=!1;N.max=String(R);N.addEventListener("pointerdown",()=>{lt=!0});window.addEventListener("pointerup",()=>{lt=!1});N.addEventListener("input",()=>{y(!1),L(Number(N.value))});function xt(t){let n=T.getBoundingClientRect();return[(t.clientX-n.left)*(F/n.width),(t.clientY-n.top)*(U/n.height)]}function vt(t,n){let r=T.getBoundingClientRect();return n*(F/r.width)/ot*c[Ct(xt(t)[0])].cell}T.addEventListener("wheel",t=>{t.preventDefault(),y(!1);let n=t.deltaMode===1?t.deltaY*33:t.deltaY,r=vt(t,n*.18);t.shiftKey&&(r*=6),t.altKey&&(r/=10),L(o+r)},{passive:!1});var it=0,rt=0;T.addEventListener("pointerdown",t=>{t.button===0&&(z=!0,it=t.clientX,rt=0,T.setPointerCapture(t.pointerId),T.classList.add("dragging"))});T.addEventListener("pointermove",t=>{if([O,V]=xt(t),!z)return;let n=t.clientX-it;it=t.clientX,rt+=Math.abs(n),rt>3&&y(!1),L(o+vt(t,n))});var St=()=>{z=!1,T.classList.remove("dragging")};T.addEventListener("pointerup",St);T.addEventListener("pointercancel",St);T.addEventListener("pointerleave",()=>{O=-1,V=-1});window.addEventListener("keydown",t=>{let n=t.target.tagName;n==="INPUT"||n==="BUTTON"||n==="TEXTAREA"||n==="SELECT"||(t.code==="Space"?(t.preventDefault(),y(!K)):t.code==="ArrowRight"?(t.preventDefault(),y(!1),L(o+(t.shiftKey?12:.5))):t.code==="ArrowLeft"&&(t.preventDefault(),y(!1),L(o-(t.shiftKey?12:.5))))});window.__grid={setT:t=>{y(!1),L(t)},getT:()=>o,play:()=>y(!0),pause:()=>y(!1),backupEvery:J};y(K);var ft=performance.now();function At(t){let n=Math.min(.1,(t-ft)/1e3);ft=t,K&&L(o+et*n),Ft(t),It(t),_t(),requestAnimationFrame(At)}requestAnimationFrame(At);})();
+
+</script>
+</body>
+</html>
